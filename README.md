@@ -2,8 +2,6 @@
 
 Sync birthdays from Google Contacts into a dedicated Google Calendar using Apps Script.
 
-Ryan-Adams57 Google Birthday Calendar
-
 Automatic syncing of Google Contacts birthdays as recurring events with reminders in Google Calendar
 
 # Introduction
