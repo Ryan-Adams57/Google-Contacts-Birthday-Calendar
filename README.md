@@ -6,9 +6,11 @@ Automatic syncing of Google Contacts birthdays as recurring events with reminder
 
 # Introduction
 
-Due to regulatory requirements, birthdays added to Google Contacts are not shown in Google Calendar, even when birthday syncing is enabled. As a result, you must either manually create a recurring birthday event for each contact and keep it updated, or risk missing important birthdays.
+Due to regulatory requirements, birthdays added to Google Contacts are not shown in Google Calendar, even when birthday syncing is enabled.
 
-Ryan-Adams57 Google Birthday Calendar uses Google Apps Script to automatically create and sync a recurring calendar event for every contact that has a birthday.
+As a result, you must either manually create a recurring birthday event for each contact and keep it updated, or risk missing important birthdays.
+
+Google Birthday Calendar uses Google Apps Script to automatically create and sync a recurring calendar event for every contact that has a birthday.
 
 # Key benefits:
 
