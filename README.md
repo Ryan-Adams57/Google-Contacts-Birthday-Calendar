@@ -22,7 +22,7 @@ Automatically sync updates once per day in the background, with email notificati
 
 # Setup
 
-A) Code and resources
+# A) Code and resources
 
 Open https://script.google.com in your browser
 
@@ -38,7 +38,7 @@ Repeat the step above and add Google Calendar API
 
 Click “Save project to Drive”
 
-B) Configuration and permissions
+# B) Configuration and permissions
 
 Adjust the configuration using the const declarations in the “CONFIGURATION” section (see comments above each setting)
 
@@ -62,7 +62,7 @@ Calendar access: used to create and update birthday events
 
 You will receive a security alert email about the granted permissions. Confirm that it was you
 
-C) Automation
+# C) Automation
 
 Once everything is working, set debug back to false
 
