@@ -12,7 +12,7 @@ As a result, you must either manually create a recurring birthday event for each
 
 Google Birthday Calendar uses Google Apps Script to automatically create and sync a recurring calendar event for every contact that has a birthday.
 
-# Key benefits:
+# Key benefits
 
 Receive birthday reminders in Google Calendar
 
