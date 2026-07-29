@@ -1,527 +1,1111 @@
-function myFunction() {
-  
-}
 /*
-* Birthday Calendar for Google Contacts and Calendar using Apps Script
-*
-* created 2026 by Ryan-Adams57
-*
-* This script is open source and shared for free usage by everybody on their own responsibility.
-* You are free to use this code in your script and projects as you like.
-* There is absolutely no guaranty, no warranty, no liabilities and no support!
-*
-* Comments, feedback and contributions are welcome via https://github.com/Ryan-Adams57/Google-Contacts-Birthday-Calendar
-*/
+ * Birthday Calendar for Google Contacts and Calendar using Apps Script
+ *
+ * created 2026 by Ryan Adams
+ * https://github.com/Ryan-Adams57/Google-Contacts-Birthday-Calendar
+ *
+ * Released under the GNU General Public License v3.0.
+ *
+ * v1.4.0 - changes over v1.3.3:
+ *   - Legacy tag keys from earlier versions removed entirely. Any series still
+ *     carrying an old key is NOT recognised by this version. Run
+ *     migrate_legacy_tags.gs once, to completion, BEFORE deploying this file,
+ *     or the next run creates a duplicate series for every contact.
+ *   - GmailApp replaced with MailApp for notifications. MailApp needs only the
+ *     script.send_mail scope instead of full mailbox access.
+ *   - Ships with an explicit appsscript.json manifest pinning the V8 runtime,
+ *     the advanced services, and a least-privilege scope list.
+ *   - Added a mass-duplicate guard. If the calendar holds many series this
+ *     version does not recognise AND the script is about to create many new
+ *     ones, it aborts instead of duplicating the whole calendar. This is the
+ *     safety net for deploying before the tag migration has finished.
+ *   - Every getEventSeriesById() result is null-checked. The API returns null
+ *     for an inaccessible series rather than throwing, so the old code raised a
+ *     misleading TypeError instead of naming the real problem.
+ *
+ * v1.3.3 - fixes over v1.3.2:
+ *   1) Calendar resolution moved out of global scope. In v1.3.2 the calendar was
+ *      resolved at file-load time, so a bad cal_id produced "No owned calendar
+ *      accessible" with no indication of whether it was unconfigured, misspelled,
+ *      subscribed-not-owned, or the wrong Google account.
+ *   2) cal_id is now validated and the error message states which of those it is.
+ *   3) Feb 29 series creation no longer builds an invalid "YYYY-02-29" date in
+ *      non-leap years (this threw an API error in v1.3.2).
+ *   4) Duplicate-series deletion is guarded per event. In v1.3.2, two occurrence
+ *      ids belonging to the same series caused the second delete to throw.
+ *   5) Error/status mail uses getEffectiveUser(), which is populated under a
+ *      time-driven trigger. getActiveUser() can return "" there, which made the
+ *      error handler itself throw and swallow the real error.
+ *   6) Per-run write cap so a first full sync cannot silently burn the daily
+ *      Calendar write quota.
+ *   7) verify_setup() and delete_birthdays_dry_run() added for pre-flight checks.
+ *
+ * Event tags are unchanged ("Ryan-Adams57_birthday", "Ryan-Adams57_birthday_feb29"),
+ * so series already in the calendar are still recognised and will NOT be duplicated.
+ *
+ * No guarantee, no warranty, no liability, no support.
+ */
 
-
-// === SETUP (detailed step-by-step) ===
-
-/* 
-*  A) Code and Resources
-*    1) Open https://script.google.com in your browser
-*    2) Create "New project" and change its title to "Birthday Calendar"
-*    3) Open the "code.gs" file from Github repository, mark everything and copy to clipboard
-*    4) Back to the Apps Script window in your browser, ensure you are in "code.gs" file, where you might see only an empty "function myFunction()"
-*    5) Mark everything and replace it by pasting the copied code from the cllipboard
-*    6) On the left pane click the "+" button next to "Services", scroll down and select "Peopleapi", click "Add" at the bottom right
-*    7) On the left pane click the "+" button next to "Services", scroll down and select "Google Calendar API", click "Add" at the bottom right
-*    8) Click "Save project to Drive" button
-*
-*  B) Configuration and Permissions
-*    1) Adjust configuration via the const... lines in the "=== CONFIGURATION ===" secion (see comments above each setting)
-*    2) For a test set "const debug = true" in the configuration to get more information about the progress via updates in the console
-*    3) Once done, hit the "Run" button to try it - and grant required permissions
-*    4) A popup will indicate "Authorization required: This project requires your permission to access your data."
-*    5) Click "Review Permissions" and select your Google account, that contains your contacts and calendar to sync
-*    6) You will get the warning, that "Google hasn't verified this app", but you can review the source code, so you can review 
-*       to be safe that there are no "funny" things included!
-*    7) Click "Advanced" at the bottom left to continue and click "Go to Birthday Calendar (unsafe)"
-*    8) Sign in by selecting your Goolge account (again) and clicking "Continue" to allow required permissions:
-*       a) Allow access to your mails - used for authentication and infos via mail in case of any errors
-*       b) Allow access to your contacts - used to read all contacts and filter the ones with a birthday given
-*       c) Allow access to your calendar - used to create / modify birthday events / series
-*    9) You will receive an email with recently granted permissions as a "Security alert", follow the included link to indicate "Yes, it was me"
-*
-*  C) Automation
-*    1) If everything worked well, you should revert the debug config to false (see above) add a regular time-based trigger
-*    2) Navigate to "Triggers" in the pane on the left. Click "Add Trigger" on the bottom right
-*    3) In the following window to add a trigger ensure the following settings:
-*       a) Function to run "update_birthdays"
-*       b) Deployment to run "Head"
-*       c) Event source "Time-driven"
-*       d) Time based trigger "Day timer"
-*       e) Time of day "10pm to 11pm"
-*       f) Failure notification - leave at default
-*    4) Scroll down and hit "Save"
-*
-*  note: Google defines a hard limit of max 6min execution time for a script - dealing with the limit this script stops execution 
-*        after 5:30min and continues its job on the next run ie on following day where it stopped before - you will get a notification 
-*        via mail in case this happens
-*  note: once a month you get a "sign of life" via mail from this script - just so you know everything is working in the background as planned
-*/
-
-
+// ============================================================================
 // === CONFIGURATION ===
+// ============================================================================
 
-// calendar id for Google calendar to hold birthdays of your contacts
-// note: either create a new calendar only for your birthdays (recommended) or use an existing one (skipping step 2 below)
-//   1) in Google Calendar / navigate to "Settings"
-//   2) select "Add calendar" / "Create new calendar" / add "Name" eg "My Birthdays" / click "Create calendar"
-//   3) select "Settings for my calendars" / select newly created calendar eg "My Birthdays" / scroll down to "Integrate calendar"
-//   4) copy "Calendar ID" as "cal_id" below, eg something like "...@group.calendar.google.com"
-const cal_id = "...@group.calendar.google.com";
+/**
+ * Calendar ID of the Google Calendar that will hold your contacts' birthdays.
+ * You must own this calendar. Subscribed and shared calendars will not work.
+ *
+ * 1) Google Calendar > Settings
+ * 2) Add calendar > Create new calendar > Name it (e.g. "My Birthdays") > Create
+ * 3) Settings for my calendars > pick that calendar > scroll to "Integrate calendar"
+ * 4) Copy the "Calendar ID" here, e.g. "abc123...@group.calendar.google.com"
+ *
+ * Leaving the placeholder in place is the single most common cause of
+ * "No owned calendar accessible".
+ * @type {string}
+ */
+const cal_id = "bad9895782e47e2e481ce4628e766981c93bacd228364d837abf797d504dbe4c@group.calendar.google.com";
 
-// title for birthday series
-// note: has to contain "%s" which is replaced by contacts (display) name
-// note: if contact birthday has year of birth specified, next occurance will have contacts age attached to event title eg "Mr X's birthday 🎁 (19)"
+/**
+ * Title for the birthday series. Must contain "%s", replaced by the contact's
+ * display name. If a year of birth is known, the next occurrence gets the age
+ * appended, e.g. "Mr X's birthday 🎁 (19)".
+ * Note: changing this value retitles EVERY existing series on the next run, which
+ * costs one Calendar write per contact. Leave it alone unless you want that.
+ * @type {string}
+ */
 const birthday_title = "%s's birthday 🎁";
 
-// description for birthday series - to view in each event the date of birth ie to know how old somebody just got
-// note: expected to be simple and only contain a valid date format, eg "* dd MMM yyyy" resulting in "* 20 Apr 1973"
-// important: description is only added, if year of birthday is specified for contact
+/**
+ * Date format used for the event description, so you can see the date of birth.
+ * Only added when the contact's birthday includes a year.
+ * @type {string}
+ */
 const birthday_description_format = "* dd MMM yyyy";
 
-// option to ignore years for description for birthday series, as some apps do not allow adding dates of birth without a valid year
-// note: set to integer "0" to always add date of birth into event description if year is given ie not empty
+/**
+ * Ignore years of birth at or below this value. Some apps store a placeholder
+ * year when no real year is known. Set to 0 to always use the year if present.
+ * @type {number}
+ */
 const birthday_description_ignore_before = 1901;
 
-// option to show birthdays as "busy" or "available" in the calendar
-// note: default for all-day events is "busy", set to "available" to show as free
-// note: if birthdays are stored in separate calendar (recommended) this will NOT affect availability visible by others (which is based on main calendar)
-// important: changes only apply to future added or changed birthday series, to apply changes to already existing birthday series in calendar, execute delete_birthdays() function and let the script re-add all birthday series with the next run
+/**
+ * Show birthdays as "busy" or "available".
+ * Only affects series added or changed after this setting changes. To apply it
+ * retroactively, run delete_birthdays() and let the next sync re-add everything.
+ * @type {string}
+ */
 const birthday_show_as = "busy";
 
-// reminder for birthdays series - triggering notifications
-// note: expects integer defining minutes before midnight - or set to boolean "false" for no reminders
-// note: must be set to a value in the range from min 5 minutes to max 40320 minutes (= 4 weeks) as limits set by Google - see https://developers.google.com/apps-script/reference/calendar/calendar-event#addPopupReminder(Integer)
-// important: changes only apply to future added or changed birthday series, to apply changes to already existing birthday series in calendar, execute delete_birthdays() function and let the script re-add all birthday series with the next run
+/**
+ * Popup reminder, in minutes before the event start. Google allows 5 to 40320
+ * (4 weeks). Set to boolean false for no reminder.
+ * Only affects series added or changed after this setting changes.
+ * @type {number|boolean}
+ */
 const birthday_reminder_minutes = 15;
 
-// option to set specific start time for birthdays - allows to trigger notifications also some time mid-day, see note about Google limitation above
-// note: default is "false" which will create all-day events starting at midnight
-// note: must be set to a value in the range from min 0 to max 23 hours, the duration of the event will be 1 hour
-// important: changes only apply to future added or changed birthday series, to apply changes to already existing birthday series in calendar, execute delete_birthdays() function and let the script re-add all birthday series with the next run
+/**
+ * Start hour (0-23) for a one-hour birthday event, so reminders can fire
+ * mid-day. Set to boolean false for all-day events starting at midnight.
+ * Only affects series added or changed after this setting changes.
+ * @type {number|boolean}
+ */
 const birthday_start_time = false;
 
-// debug mode will log details upon execution into console
-// note: if disabled ie set to boolean "false" eg for unattended regular runs, script will send an email for errors occuring
+/**
+ * Maximum number of NEW series this script will create in a single run.
+ * Purpose: a first full sync of several hundred contacts issues roughly four
+ * Calendar writes per contact (create, tag, transparency, reminder). Consumer
+ * accounts allow roughly 500 to 1000 Calendar writes per day, and exhausting
+ * that blocks all Calendar writes for about 24 hours. The cap spreads a large
+ * first sync over several daily runs instead of hitting the wall mid-job.
+ * Set to 0 for no cap.
+ * @type {number}
+ */
+const max_new_series_per_run = 100;
+
+/**
+ * Mass-duplicate guard thresholds.
+ *
+ * Renaming the event tag key orphans every series already in the calendar: the
+ * script stops recognising them and recreates all of them as duplicates on its
+ * next run. That signature is "many unrecognised events present" AND "many new
+ * series about to be created" at the same time. When both counts reach the
+ * threshold below, the run aborts and tells you to finish the tag migration.
+ *
+ * A genuine first install trips nothing, because an empty calendar has no
+ * unrecognised events. Set to 0 to disable the guard entirely.
+ * @type {number}
+ */
+const duplicate_guard_threshold = 10;
+
+/**
+ * Debug mode logs progress to the console instead of emailing on error.
+ * Set to false for unattended trigger runs.
+ * @type {boolean}
+ */
 const debug = false;
 
+// ============================================================================
+// === STOP: Do NOT edit anything below this line ===
+// ============================================================================
 
-// === STOP: Do NOT edit anything below this line! ===
+/** @type {string} */
+const version = "1.4.0";
 
-// script version
-const version = "1.3.2";
+/** Tag keys written onto every series this script owns. Do not change these. */
+const TAG_BIRTHDAY = "Ryan-Adams57_birthday";
+const TAG_FEB29 = "Ryan-Adams57_birthday_feb29";
 
-// get Google services
-const people_service = People.People;
-const cal_service = CalendarApp;
-const yearly = cal_service.newRecurrence().addYearlyRule();
+/** Placeholder shipped in the repo. Used only to give a precise error message. */
+const CAL_ID_PLACEHOLDER = "...@group.calendar.google.com";
 
-// get birthday calendar and implicitly check ownership
-const cal_birthday = cal_service.getOwnedCalendarById(cal_id);
-
-// set birthday status as busy (opaque) / free (transparent) by getting respective code from CalendarApp
-const birthday_status = ("available" == birthday_show_as) ? cal_service.EventTransparency.TRANSPARENT : cal_service.EventTransparency.OPAQUE;
-
-// ensure birthday start hour is a valid value or false as fallback for full-day
-const birthday_start_hour = (0 <= birthday_start_time && birthday_start_time <= 23) ? birthday_start_time : false;
-
-// own execution time limit in milliseconds - 330000ms = 1000ms * 60sec * 5.5min (vs hard Google limit after 6min)
+/**
+ * Own execution ceiling in milliseconds. 330000 = 5.5 minutes, against Google's
+ * hard 6-minute limit. On timeout the run stops and resumes on the next trigger.
+ * @type {number}
+ */
 const exec_limit = 330000;
 
-// simple short form for months - only used for log/debug
-const month_short = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+/** Short month names, log output only. @type {string[]} */
+const month_short = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 
-// main script for regular execution to sync birthdays
-function update_birthdays() {
+/**
+ * Resolved start hour, or false for an all-day event.
+ * Explicit integer check. v1.3.2 relied on boolean false coercing to 0, which
+ * happened to work but made 0 (midnight) and false indistinguishable in intent.
+ * @type {number|boolean}
+ */
+const birthday_start_hour = (
+  typeof birthday_start_time === "number" &&
+  birthday_start_time % 1 === 0 &&
+  birthday_start_time >= 0 &&
+  birthday_start_time <= 23
+) ? birthday_start_time : false;
+
+// ----------------------------------------------------------------------------
+// Service accessors. Deliberately lazy: anything that touches CalendarApp or
+// People at file-load time throws outside every try/catch in the file, which is
+// what made the v1.3.2 failure so opaque.
+// ----------------------------------------------------------------------------
+
+/**
+ * Fetch an event series by id, or throw a message that names the real problem.
+ * getEventSeriesById returns null for a series that does not exist or is not
+ * accessible; it does not throw. Dereferencing that null produced a misleading
+ * TypeError in earlier versions.
+ *
+ * Must be called on the Calendar object, not on CalendarApp: CalendarApp's own
+ * getEventSeriesById only resolves series on the DEFAULT calendar, which is not
+ * where the birthday series live.
+ * @param {GoogleAppsScript.Calendar.Calendar} calendar
+ * @param {string} series_id
+ * @returns {GoogleAppsScript.Calendar.CalendarEventSeries}
+ * @throws {Error} if the series cannot be resolved
+ */
+function require_series(calendar, series_id) {
+  const series = calendar.getEventSeriesById(series_id);
+  if (!series) {
+    throw new Error("Event series " + series_id + " could not be resolved on calendar \"" +
+                    calendar.getName() + "\" (deleted, or not accessible to this account)");
+  }
+  return series;
+}
+
+/**
+ * Read the contact id tag from an event or series.
+ * Single point of change if the tag key is ever renamed again. A rename requires
+ * a migration pass over existing series first, or every contact is duplicated.
+ * @param {GoogleAppsScript.Calendar.CalendarEvent|GoogleAppsScript.Calendar.CalendarEventSeries} event
+ * @returns {string|undefined} People API resourceName, or undefined if untagged
+ */
+function get_people_tag(event) {
+  return event.getTag(TAG_BIRTHDAY);
+}
+
+/**
+ * Read the Feb 29 marker from an event or series.
+ * @param {GoogleAppsScript.Calendar.CalendarEvent|GoogleAppsScript.Calendar.CalendarEventSeries} event
+ * @returns {string|undefined}
+ */
+function get_feb29_tag(event) {
+  return event.getTag(TAG_FEB29);
+}
+
+/**
+ * Resolve the birthday calendar, or throw with a message that says why not.
+ * @returns {GoogleAppsScript.Calendar.Calendar} the owned birthday calendar
+ * @throws {Error} if cal_id is unset, malformed, not owned, or on the wrong account
+ */
+function get_birthday_calendar() {
+  if (typeof cal_id !== "string" || cal_id.trim() === "") {
+    throw new Error("cal_id is empty. Set it in the CONFIGURATION section.");
+  }
+
+  if (cal_id.trim() === CAL_ID_PLACEHOLDER) {
+    throw new Error(
+      "cal_id is still the placeholder from the repository (\"" + CAL_ID_PLACEHOLDER + "\"). " +
+      "Replace it with your real Calendar ID: Google Calendar > Settings > " +
+      "Settings for my calendars > your birthday calendar > Integrate calendar > Calendar ID."
+    );
+  }
+
+  if (cal_id.indexOf("@") === -1) {
+    throw new Error("cal_id does not look like a Calendar ID (no \"@\"): " + cal_id);
+  }
+
+  let calendar = null;
+  try {
+    calendar = CalendarApp.getOwnedCalendarById(cal_id);
+  } catch (err) {
+    // Malformed ids and revoked scopes surface here rather than returning null.
+    throw new Error("Calendar lookup failed for \"" + cal_id + "\": " + err.message);
+  }
+
+  if (!calendar) {
+    const account = get_user_email() || "(unknown account)";
+    const owned = list_owned_calendars_safe();
+    throw new Error(
+      "No owned calendar found with id \"" + cal_id + "\" for account " + account + ". " +
+      "Either the id is wrong, the calendar is subscribed/shared rather than owned by this " +
+      "account, or the script was authorized under a different Google account. " +
+      "Owned calendars visible to this authorization: " +
+      (owned.length ? owned.join(" | ") : "NONE")
+    );
+  }
+
+  return calendar;
+}
+
+/**
+ * List owned calendars for diagnostics. Never throws.
+ * @returns {string[]} "name <id>" strings
+ */
+function list_owned_calendars_safe() {
+  try {
+    return CalendarApp.getAllOwnedCalendars().map(function (cal) {
+      return cal.getName() + " <" + cal.getId() + ">";
+    });
+  } catch (err) {
+    return ["(could not enumerate calendars: " + err.message + ")"];
+  }
+}
+
+/**
+ * Email address of the identity this script runs as.
+ * getEffectiveUser() is populated under a time-driven trigger; getActiveUser()
+ * frequently is not, which is why v1.3.2's error mail could itself fail.
+ * @returns {string} email address, or "" if unavailable
+ */
+function get_user_email() {
+  try {
+    const effective = Session.getEffectiveUser().getEmail();
+    if (effective) { return effective; }
+  } catch (err) { /* fall through */ }
+  try {
+    return Session.getActiveUser().getEmail() || "";
+  } catch (err) {
+    return "";
+  }
+}
+
+/**
+ * Send a notification mail. Never throws: a failure here must not mask the
+ * original error that triggered it.
+ * @param {string} subject
+ * @param {string} body
+ * @returns {boolean} true if the mail was handed to Gmail
+ */
+function notify(subject, body) {
+  const recipient = get_user_email();
+  if (!recipient) {
+    console.error("Cannot send notification, no recipient address available. Body was:\n" + body);
+    return false;
+  }
+  try {
+    // MailApp, not GmailApp: MailApp needs only the script.send_mail scope,
+    // whereas GmailApp requests full read/write access to the whole mailbox.
+    MailApp.sendEmail(recipient, subject, body);
+    return true;
+  } catch (err) {
+    console.error("Notification mail failed (" + err.message + "). Body was:\n" + body);
+    return false;
+  }
+}
+
+/**
+ * Yearly recurrence rule.
+ * @returns {GoogleAppsScript.Calendar.EventRecurrence}
+ */
+function get_yearly_recurrence() {
+  return CalendarApp.newRecurrence().addYearlyRule();
+}
+
+/**
+ * Transparency value matching the birthday_show_as setting.
+ * @returns {GoogleAppsScript.Calendar.EventTransparency}
+ */
+function get_birthday_status() {
+  return ("available" === birthday_show_as)
+    ? CalendarApp.EventTransparency.TRANSPARENT
+    : CalendarApp.EventTransparency.OPAQUE;
+}
+
+// ----------------------------------------------------------------------------
+// Pre-flight check
+// ----------------------------------------------------------------------------
+
+/**
+ * Abort a run that is about to duplicate the whole calendar.
+ *
+ * The failure being prevented: if the tag key changes, series already in the
+ * calendar stop being recognised, every contact looks unsynced, and the script
+ * recreates the lot. Roughly four Calendar writes per contact against a consumer
+ * ceiling of about 500 to 1000 writes per day, so it half-finishes, blocks all
+ * Calendar writes for about 24 hours, and leaves a partly duplicated calendar
+ * with no way to tell which copy is authoritative.
+ *
+ * The signature is both conditions at once: many events present that this
+ * version cannot identify, and many series about to be created. A real first
+ * install has no unidentified events, so it passes.
+ *
+ * @param {number} unrecognised_count events in the window with no readable tag
+ * @param {number} to_create_count contacts with no matching series
+ * @throws {Error} if both counts reach duplicate_guard_threshold
+ */
+function assert_no_mass_duplication(unrecognised_count, to_create_count) {
+  if (duplicate_guard_threshold <= 0) { return; }
+  if (unrecognised_count < duplicate_guard_threshold) { return; }
+  if (to_create_count < duplicate_guard_threshold) { return; }
+
+  throw new Error(
+    "ABORTED before creating anything. The calendar holds " + unrecognised_count +
+    " event(s) this version cannot identify, and " + to_create_count +
+    " contact(s) look unsynced. That is the signature of an unfinished tag " +
+    "migration, and continuing would create a duplicate series for every " +
+    "contact. Run migrate_legacy_tags() to completion first. If you are certain " +
+    "this is wrong (for example the calendar genuinely contains unrelated " +
+    "events), set duplicate_guard_threshold = 0 to override."
+  );
+}
+
+/**
+ * Run this manually before anything else. Confirms which account the script is
+ * authorized as, what calendars that account owns, whether cal_id resolves, and
+ * how many contacts carry a birthday. Read-only: creates and deletes nothing.
+ */
+function verify_setup() {
+  console.log("Birthday Calendar v" + version + " setup check");
+  console.log("Authorized account: " + (get_user_email() || "(unavailable)"));
+  console.log("Owned calendars:");
+  list_owned_calendars_safe().forEach(function (line) { console.log("  " + line); });
 
   try {
+    const calendar = get_birthday_calendar();
+    console.log("cal_id resolved OK: \"" + calendar.getName() + "\" (timezone " + calendar.getTimeZone() + ")");
+  } catch (err) {
+    console.error("cal_id FAILED: " + err.message);
+    return;
+  }
 
-    if(!cal_birthday) {
-      throw new Error("No owned calendar accessible");
+  try {
+    const calendar = get_birthday_calendar();
+    const range = get_one_year_window();
+    const all_events = calendar.getEvents(range.start, range.end);
+    const recognised = all_events.filter(function (e) { return get_people_tag(e) !== undefined; });
+    console.log("Events on the birthday calendar in the next year: " + all_events.length);
+    console.log("  recognised by this version: " + recognised.length);
+    console.log("  NOT recognised: " + (all_events.length - recognised.length));
+    if (all_events.length - recognised.length >= duplicate_guard_threshold) {
+      console.warn("Unrecognised events present. If these are birthday series from an " +
+                   "earlier version, run migrate_legacy_tags() to completion BEFORE the " +
+                   "next update_birthdays() run, or every contact will be duplicated.");
+    }
+  } catch (err) {
+    console.error("Calendar scan FAILED: " + err.message);
+  }
+
+  try {
+    const contacts = get_contacts_with_birthdays();
+    const count = Object.keys(contacts).length;
+    console.log("Contacts with a birthday: " + count);
+    if (max_new_series_per_run > 0 && count > max_new_series_per_run) {
+      console.log(
+        "First full sync will be spread across about " +
+        Math.ceil(count / max_new_series_per_run) + " daily runs " +
+        "(cap of " + max_new_series_per_run + " new series per run, to stay inside the " +
+        "consumer Calendar write quota of roughly 500 to 1000 writes per day)."
+      );
+    }
+  } catch (err) {
+    console.error("Contact read FAILED: " + err.message);
+  }
+}
+
+// ----------------------------------------------------------------------------
+// Contact reading
+// ----------------------------------------------------------------------------
+
+/**
+ * Read every contact that has both a display name and a birthday date.
+ * @returns {Object<string, {name: string, birthday: {year?: number, month: number, day: number}}>}
+ *          keyed by People API resourceName
+ * @throws {Error} if the People API call fails
+ */
+function get_contacts_with_birthdays() {
+  /** @type {Object<string, {name: string, birthday: Object}>} */
+  const contacts_birthdays = {};
+  let page_token = null;
+
+  do {
+    const response = People.People.Connections.list("people/me", {
+      personFields: "names,birthdays",
+      pageSize: 1000,
+      pageToken: page_token
+    });
+
+    const connections = response.connections || [];
+    connections.forEach(function (connection) {
+      const names = connection.names || [];
+      const birthdays = connection.birthdays || [];
+      // A birthday entry can exist with no date attached; skip those.
+      if (names.length > 0 && birthdays.length > 0 && birthdays[0].date !== undefined) {
+        const date = birthdays[0].date;
+        // month and day are mandatory for a usable recurrence.
+        if (date.month !== undefined && date.day !== undefined) {
+          contacts_birthdays[connection.resourceName] = {
+            name: names[0].displayName,
+            birthday: date
+          };
+        }
+      }
+    });
+
+    page_token = response.nextPageToken;
+  } while (page_token);
+
+  return contacts_birthdays;
+}
+
+// ----------------------------------------------------------------------------
+// Main sync
+// ----------------------------------------------------------------------------
+
+/**
+ * Main entry point. Point the time-driven trigger at this function.
+ * Adds, updates and removes birthday series to match Google Contacts.
+ */
+function update_birthdays() {
+  /** @type {number} */
+  const start = new Date().getTime();
+  /** @type {number} */
+  let new_series_added = 0;
+  /** @type {boolean} */
+  let hit_add_cap = false;
+
+  try {
+    const cal_birthday = get_birthday_calendar();
+    if (debug) { console.time("Total execution"); }
+
+    const timezone = cal_birthday.getTimeZone();
+    const yearly = get_yearly_recurrence();
+    const birthday_status = get_birthday_status();
+
+    // --- contacts -------------------------------------------------------
+    if (debug) { console.time("Getting contacts"); }
+    const contacts_birthdays = get_contacts_with_birthdays();
+    if (debug) {
+      console.log(Object.keys(contacts_birthdays).length + " contacts with birthdays found");
+      console.timeEnd("Getting contacts");
     }
 
-    // start own timer (milliseconds)
-    const start = new Date().getTime();
+    // --- existing series in the calendar --------------------------------
+    // A one-year window from tomorrow captures each yearly series exactly once.
+    if (debug) { console.time("Getting birthdays"); }
 
-    if(debug) { console.time("Total execution"); }
-
-    // determine birthday calendar timezone
-    const timezone = cal_birthday.getTimeZone();
-
-    // get all contacts with (current) birthday
-    // { "[people/]xxx": { name: xxx, birthday: { [year: xxx,] month: xxx, day: xxx } } }
-    let contacts_birthdays = {};
-    
-    if(debug) { console.time("Getting contacts"); }
-
-    // by default People api returns results in pages
-    let page_token = null;
-    do {
-
-      // get names and birthdays of all contacts
-      const contacts = people_service.Connections.list("people/me", { personFields: 'names,birthdays', pageToken: page_token });
-      const connections = contacts.connections || [];
-
-      // simplify data by collecting only resourceName, display name, birthday date object of contacts with a birthday saved
-      connections.forEach(connection => {
-        const names = connection.names || [];
-        const birthdays = connection.birthdays || [];
-        if(names.length > 0 && birthdays.length > 0 && birthdays[0].date !== undefined) {
-          contacts_birthdays[connection.resourceName] = { name: names[0].displayName, birthday: birthdays[0].date };
-        }
-      });
-
-      page_token = contacts.nextPageToken;
-    } while (page_token);
-
-    if(debug) { console.log(Object.keys(contacts_birthdays).length + " contacts with birthdays found"); console.timeEnd("Getting contacts"); }
-
-    // get all events from birthday calendar within last one year with Ryan-Adams57_birthday tag (= associated people_id)
-    // { "[people/]xxx": { id: xxx, title: xxx, date: { year: xxx, month: xxx, day: xxx }, description: xxx } }
-    let birthday_events = {};
-
-    if(debug) { console.time("Getting birthdays"); }
-
-    // beginning of tomorrow
     const tomorrow = new Date();
     tomorrow.setDate(tomorrow.getDate() + 1);
-    tomorrow.setHours(0, 0, 0);
+    tomorrow.setHours(0, 0, 0, 0);
 
-    // end of day in one year from now
     const nextYear = new Date();
     nextYear.setFullYear(nextYear.getFullYear() + 1);
-    nextYear.setHours(23, 59, 59);
+    nextYear.setHours(23, 59, 59, 999);
 
-    // get all individual events from tomorrow until one year ahead tagged "Ryan-Adams57_birthday" ie added by this script
-    const events = cal_birthday.getEvents(tomorrow, nextYear).filter(e => e.getTag("Ryan-Adams57_birthday") !== undefined);
+    const all_events = cal_birthday.getEvents(tomorrow, nextYear);
+    const events = all_events.filter(function (e) { return get_people_tag(e) !== undefined; });
+    /** Events on this calendar that this version cannot tie to a contact. */
+    const unrecognised_count = all_events.length - events.length;
 
-    // collect duplicates ie multiple birthday events per person within one year
-    // note: this should not happen, but calendar technically allows multiple recurrences and upon error these can happen and would go "unnoticed" by script
-    // { "event_id": "[people/]xxx" }
-    let duplicates = {};
+    /** @type {Object<string, Object>} keyed by people_id */
+    const birthday_events = {};
+    /** @type {Object<string, {people_id: string, event_title: string}>} keyed by event id */
+    const duplicates = {};
 
-    // simplify: collect only resourceName (tag), event id, title, date (in same structure as birthday date above), description, transparency and feb29
-    events.forEach(event => {
-
-      const people_id = event.getTag("Ryan-Adams57_birthday");
+    events.forEach(function (event) {
+      const people_id = get_people_tag(event);
       const event_id = event.getId();
       const event_title = event.getTitle();
       const event_date = event.getStartTime();
-      
-      // identify duplicates and add both occurences to duplicates - note: one occurence remains in birthday_events until removed later
-      if(undefined !== birthday_events[people_id]) {
-        duplicates[birthday_events[people_id]["id"]] = { people_id: people_id, event_title: birthday_events[people_id]["title"] };
+
+      // More than one series per contact should not happen, but the calendar
+      // permits it and an interrupted run can create it. Collect both sides.
+      if (undefined !== birthday_events[people_id]) {
+        duplicates[birthday_events[people_id]["id"]] = {
+          people_id: people_id,
+          event_title: birthday_events[people_id]["title"]
+        };
         duplicates[event_id] = { people_id: people_id, event_title: event_title };
       }
-      
-      birthday_events[people_id] = { id: event_id, title: event_title, date: { day: event_date.getDate(), month: event_date.getMonth() + 1, year: event_date.getFullYear() }, description: event.getDescription(), status: event.getTransparency(), feb29: event.getTag("Ryan-Adams57_birthday_feb29") };
 
+      birthday_events[people_id] = {
+        id: event_id,
+        title: event_title,
+        date: {
+          day: event_date.getDate(),
+          month: event_date.getMonth() + 1,
+          year: event_date.getFullYear()
+        },
+        description: event.getDescription(),
+        status: event.getTransparency(),
+        feb29: get_feb29_tag(event)
+      };
     });
 
-    // remove duplicates (ensure non of the series remains, as there is no way to determine the correct one - missing correct one will be re-added later)
-    Object.keys(duplicates).forEach(function(event_id) {
-
-      const duplicate = duplicates[event_id];    
-
-      if(debug) { console.time("Removing duplicate"); }
-      cal_birthday.getEventSeriesById(event_id).deleteEventSeries();
-      // remove remaining occurence from birthday_events
+    // Remove all copies of a duplicated series. There is no way to tell which
+    // copy is authoritative, so both go and the correct one is re-added below.
+    Object.keys(duplicates).forEach(function (event_id) {
+      const duplicate = duplicates[event_id];
+      try {
+        require_series(cal_birthday, event_id).deleteEventSeries();
+        if (debug) { console.log("Removed duplicate '" + duplicate["event_title"] + "'"); }
+      } catch (err) {
+        // Both ids can resolve to the same series, in which case the second
+        // lookup fails after the first delete. Not fatal.
+        if (debug) { console.log("Duplicate " + event_id + " already gone: " + err.message); }
+      }
       delete birthday_events[duplicate["people_id"]];
-      if(debug) { console.log("Removed duplicate '" + duplicate["event_title"] + "' from calendar"); console.timeEnd("Removing duplicate"); }
-
     });
 
-    if(debug) { console.log(Object.keys(birthday_events).length + " birthday series found in calendar"); console.timeEnd("Getting birthdays"); }
+    if (debug) {
+      console.log(Object.keys(birthday_events).length + " birthday series found in calendar");
+      console.timeEnd("Getting birthdays");
+    }
 
-    // loop through all birthday events - remove or update series on calendar, if
-    //    a) contact does not exist or not have a birthday specified anymore
-    //    b) date (year, month or day) of birthday or contact (display) name (and thus event title) changed
-    // note: requires approx 1 second per birthday series to remove or .5 seconds to update - if terminated will resume job upon next launch
-    Object.keys(birthday_events).forEach(function(people_id) {
-
+    // --- reconcile existing series --------------------------------------
+    // Roughly 1s per removal, 0.5s per update. On timeout the run stops and
+    // resumes on the next trigger.
+    Object.keys(birthday_events).forEach(function (people_id) {
       const birthday = birthday_events[people_id];
 
-      // contact does not exist or not have a birthday specified anymore -> delete series from calendar
-      if(undefined === contacts_birthdays[people_id]) {
-        if(debug) { console.time("Removing birthday series"); }
-        cal_birthday.getEventSeriesById(birthday.id).deleteEventSeries();
+      // Contact gone, or its birthday removed, so the series goes too.
+      if (undefined === contacts_birthdays[people_id]) {
+        if (debug) { console.time("Removing birthday series"); }
+        try {
+          require_series(cal_birthday, birthday.id).deleteEventSeries();
+          if (debug) { console.log("Removed '" + birthday.title + "' from calendar"); }
+        } catch (err) {
+          console.error("Could not remove '" + birthday.title + "': " + err.message);
+        }
         delete birthday_events[people_id];
-        if(debug) { console.log("Removed '" + birthday.title + "' from calendar"); console.timeEnd("Removing birthday series"); }
+        if (debug) { console.timeEnd("Removing birthday series"); }
         return;
       }
 
       const contact = contacts_birthdays[people_id];
+      /** @type {GoogleAppsScript.Calendar.CalendarEventSeries|undefined} */
       let birthday_series = undefined;
 
-      // simplify month-day comparisson
       const contact_birthday = contact.birthday["month"] + "-" + contact.birthday["day"];
       const birthday_date = birthday.date["month"] + "-" + birthday.date["day"];
 
-      // (moved to Feb 29 or never set correct rrule ie missing tag) or (moved from Feb 29, identified via tag or event date)
-      // note: requires deleting series from calendar and from existing birthdays_events array, as setRecurrence function does NOT handle Feb 29 rule - see (re-)adding series again further below
-      if((("2-29" == contact_birthday || "2-29" == birthday_date) && !birthday.feb29) || ("2-29" != contact_birthday && (birthday.feb29 || "2-29" == birthday_date))) {
-        if(debug) { console.time("Deleting birthday series"); }
-        if(undefined == birthday_series) {
-          birthday_series = cal_birthday.getEventSeriesById(birthday.id);
+      // Feb 29 needs a BYMONTHDAY=-1 rule that setRecurrence() cannot express,
+      // so any series moving onto or off Feb 29 is deleted and re-created below.
+      const touches_feb29 =
+        (("2-29" === contact_birthday || "2-29" === birthday_date) && !birthday.feb29) ||
+        ("2-29" !== contact_birthday && (birthday.feb29 || "2-29" === birthday_date));
+
+      if (touches_feb29) {
+        if (debug) { console.time("Deleting birthday series"); }
+        try {
+          require_series(cal_birthday, birthday.id).deleteEventSeries();
+          if (debug) {
+            console.log("Deleted series for '" + contact.name + "' (Feb 29 handling), will re-add");
+          }
+        } catch (err) {
+          console.error("Could not delete Feb 29 series for '" + contact.name + "': " + err.message);
         }
-        birthday_series.deleteEventSeries();
         delete birthday_events[people_id];
-        if(debug) { console.log("Deleted birthday series for '" + contact.name + "' as touched 'Feb 29' which requires special handling - it will be re-added later..."); console.timeEnd("Deleting birthday series"); }
+        if (debug) { console.timeEnd("Deleting birthday series"); }
         return;
       }
-      // other "normal" date changes 
-      else if(birthday_date != contact_birthday && !birthday.feb29) {
-        if(debug) { console.time("Modifying birthday series"); }
-        if(undefined == birthday_series) {
-          birthday_series = cal_birthday.getEventSeriesById(birthday.id);
+
+      // Ordinary date change.
+      if (birthday_date !== contact_birthday && !birthday.feb29) {
+        if (debug) { console.time("Modifying birthday series"); }
+        try {
+          if (undefined === birthday_series) {
+            birthday_series = require_series(cal_birthday, birthday.id);
+          }
+          if (false === birthday_start_hour) {
+            birthday_series.setRecurrence(yearly, get_birthday_date(contact.birthday));
+          } else {
+            const birthday_hours = get_birthday_hours(contact.birthday);
+            birthday_series.setRecurrence(yearly, birthday_hours.start, birthday_hours.end);
+          }
+          if (debug) {
+            console.log(
+              "Moved '" + contact.name + "' from " +
+              month_short[birthday.date["month"] - 1] + " " + birthday.date["day"] + " to " +
+              month_short[contact.birthday["month"] - 1] + " " + contact.birthday["day"]
+            );
+          }
+        } catch (err) {
+          console.error("Could not move series for '" + contact.name + "': " + err.message);
         }
-        // all-day event
-        if(false === birthday_start_hour) {
-          birthday_series.setRecurrence(yearly, get_birthday_date(contact.birthday));
-        }
-        // one-hour event
-        else {
-          const birthday_hours = get_birthday_hours(contact.birthday);
-          birthday_series.setRecurrence(yearly, birthday_hours.start, birthday_hours.end);
-        }
-        if(debug) { console.log("Changed date of birthday series for '" + contact.name + "' from '" + month_short[birthday.date["month"] - 1] + " " + birthday.date["day"] + "' to '" + month_short[contact.birthday["month"] - 1] + " " + contact.birthday["day"] + "'"); console.timeEnd("Modifying birthday series"); }
+        if (debug) { console.timeEnd("Modifying birthday series"); }
       }
 
-      // contact (display) name (and thus event title) changed -> update series title
-      const birthday_title = get_birthday_title(contact.name);
-      const birthday_title_age = get_birthday_title_age(birthday_title, birthday.date["year"], contact.birthday["year"]);
-      if(birthday.title !== birthday_title && birthday.title !== birthday_title_age) {
-        if(debug) { console.time("Modifying birthday series"); }
-        if(undefined == birthday_series) {
-          birthday_series = cal_birthday.getEventSeriesById(birthday.id);
+      // Display name changed, so the title changes.
+      const new_title = get_birthday_title(contact.name);
+      const new_title_age = get_birthday_title_age(
+        new_title, birthday.date["year"], contact.birthday["year"]
+      );
+      if (birthday.title !== new_title && birthday.title !== new_title_age) {
+        if (debug) { console.time("Modifying birthday series"); }
+        try {
+          if (undefined === birthday_series) {
+            birthday_series = require_series(cal_birthday, birthday.id);
+          }
+          birthday_series.setTitle(new_title);
+          if (debug) { console.log("Retitled '" + birthday.title + "' to '" + new_title + "'"); }
+        } catch (err) {
+          console.error("Could not retitle '" + birthday.title + "': " + err.message);
         }
-        birthday_series.setTitle(birthday_title);
-        if(debug) { console.log("Changed title from '" + birthday.title + "' to '" + birthday_title + "'"); console.timeEnd("Modifying birthday series"); }
+        if (debug) { console.timeEnd("Modifying birthday series"); }
       }
 
-      // event description changed -> update series description
-      const birthday_description = get_birthday_description(contact.birthday, timezone);
-      if(birthday.description !== birthday_description) {
-        if(debug) { console.time("Modifying birthday series"); }
-        if(undefined == birthday_series) {
-          birthday_series = cal_birthday.getEventSeriesById(birthday.id);
+      // Year of birth added, removed or corrected, so the description changes.
+      const new_description = get_birthday_description(contact.birthday, timezone);
+      if (birthday.description !== new_description) {
+        if (debug) { console.time("Modifying birthday series"); }
+        try {
+          if (undefined === birthday_series) {
+            birthday_series = require_series(cal_birthday, birthday.id);
+          }
+          birthday_series.setDescription(new_description);
+          if (debug) { console.log("Updated description for '" + new_title + "'"); }
+        } catch (err) {
+          console.error("Could not update description for '" + new_title + "': " + err.message);
         }
-        birthday_series.setDescription(birthday_description);
-        if(debug) { console.log("Changed description of '" + birthday_title + "' from '" + birthday.description + "' to '" + birthday_description + "'"); console.timeEnd("Modifying birthday series"); }
+        if (debug) { console.timeEnd("Modifying birthday series"); }
       }
 
-      // check own timer against own limit
-      if(new Date().getTime() - start > exec_limit) {
+      if (new Date().getTime() - start > exec_limit) {
         throw new Error("Exceeded maximum execution time - will resume on next run");
       }
-
     });
 
-    // loop through all contacts with birthdays - add series, if not existing in all birthday events
-    // note: requires approx 2 seconds per birthday series to add - if terminated will resume job upon next launch
-    Object.keys(contacts_birthdays).forEach(function(people_id) {
+    // --- guard -----------------------------------------------------------
+    // Last checkpoint before any series is created. Throws rather than writes.
+    const to_create_count = Object.keys(contacts_birthdays).filter(function (people_id) {
+      return undefined === birthday_events[people_id];
+    }).length;
+    assert_no_mass_duplication(unrecognised_count, to_create_count);
+    if (debug) {
+      console.log(to_create_count + " series to create, " +
+                  unrecognised_count + " unrecognised event(s) on the calendar");
+    }
 
-      if(debug) { console.time("Adding birthday series"); }
+    // --- add missing series ---------------------------------------------
+    // Roughly 2s and 4 Calendar writes per series.
+    Object.keys(contacts_birthdays).forEach(function (people_id) {
+      if (undefined !== birthday_events[people_id]) { return; }
 
-      if(undefined === birthday_events[people_id]) {
+      if (max_new_series_per_run > 0 && new_series_added >= max_new_series_per_run) {
+        hit_add_cap = true;
+        return;
+      }
 
-        const contact = contacts_birthdays[people_id];
+      const contact = contacts_birthdays[people_id];
+      if (debug) { console.time("Adding birthday series"); }
 
-        // create birthday event series, add tag and reminders
+      try {
+        /** @type {GoogleAppsScript.Calendar.CalendarEventSeries|undefined} */
         let new_series = undefined;
-        // special handling for birthdays on Feb 29 - add recurrence on the last day of Feb each year
-        // note: special RRULE can not be generated for usage by createAllDayEventSeries function -> workaround via Calendar API
-        if(2 == contact.birthday["month"] && 29 == contact.birthday["day"]) {
-          const birthday_start_year = get_birthday_date(contact.birthday).getFullYear();
-          // all-day event
-          let event_start = { date: birthday_start_year + "-02-29" };
-          let event_end = { date: birthday_start_year + "-03-01" };
-          // one-hour event
-          if(false !== birthday_start_hour) {
-            const birthday_hours = get_birthday_hours(contact.birthday);
-            event_start = { dateTime: birthday_hours.start.toISOString(), timeZone: 'UTC' };
-            event_end = { dateTime: birthday_hours.end.toISOString(), timeZone: 'UTC' };
+
+        if (2 === contact.birthday["month"] && 29 === contact.birthday["day"]) {
+          // Feb 29: recur on the last day of February every year. The plain
+          // createAllDayEventSeries cannot express BYMONTHDAY=-1, so insert via
+          // the Advanced Calendar Service.
+          //
+          // v1.3.2 built this start date from get_birthday_date(), which rolls
+          // Feb 29 forward to Mar 1 in a non-leap year and then produced an
+          // invalid literal such as "2025-02-29". Anchor on a real leap year.
+          const leap_year = get_recent_leap_year();
+          let event_start = { date: leap_year + "-02-29" };
+          let event_end = { date: leap_year + "-03-01" };
+
+          if (false !== birthday_start_hour) {
+            const hours = get_feb29_hours(leap_year);
+            event_start = { dateTime: hours.start.toISOString(), timeZone: "UTC" };
+            event_end = { dateTime: hours.end.toISOString(), timeZone: "UTC" };
           }
+
           const feb29_insert = Calendar.Events.insert({
             start: event_start,
             end: event_end,
             recurrence: ["RRULE:FREQ=YEARLY;INTERVAL=1;BYMONTH=2;BYMONTHDAY=-1"],
             summary: get_birthday_title(contact.name),
-            description: get_birthday_description(contact.birthday, timezone),
+            description: get_birthday_description(contact.birthday, timezone)
           }, cal_id);
+
+          // Inserted via the Advanced Calendar Service, so it must be read back
+          // through CalendarApp before tags can be attached.
           new_series = cal_birthday.getEventSeriesById(feb29_insert.iCalUID);
-          new_series.setTag("Ryan-Adams57_birthday_feb29", "feb29");
-        }
-        // all other dates follow a simple yearly recurrence
-        else {
-          // all-day event
-          if(false === birthday_start_hour) {
-            new_series = cal_birthday.createAllDayEventSeries(get_birthday_title(contact.name), get_birthday_date(contact.birthday), yearly, { description: get_birthday_description(contact.birthday, timezone) });
+          if (!new_series) {
+            throw new Error(
+              "Feb 29 series was inserted (iCalUID " + feb29_insert.iCalUID +
+              ") but could not be read back to tag it. It is now an untagged " +
+              "series on the calendar and needs removing by hand."
+            );
           }
-          // one-hour event
-          else {
-            const birthday_hours = get_birthday_hours(contact.birthday);
-            new_series = cal_birthday.createEventSeries(get_birthday_title(contact.name), birthday_hours.start, birthday_hours.end, yearly, { description: get_birthday_description(contact.birthday, timezone) });
+          new_series.setTag(TAG_FEB29, "feb29");
+        } else {
+          if (false === birthday_start_hour) {
+            new_series = cal_birthday.createAllDayEventSeries(
+              get_birthday_title(contact.name),
+              get_birthday_date(contact.birthday),
+              yearly,
+              { description: get_birthday_description(contact.birthday, timezone) }
+            );
+          } else {
+            const hours = get_birthday_hours(contact.birthday);
+            new_series = cal_birthday.createEventSeries(
+              get_birthday_title(contact.name),
+              hours.start,
+              hours.end,
+              yearly,
+              { description: get_birthday_description(contact.birthday, timezone) }
+            );
           }
         }
-        new_series.setTag("Ryan-Adams57_birthday", people_id);
+
+        // The tag is what makes this series recoverable on later runs. If it
+        // fails, the series becomes an orphan and would be duplicated next run,
+        // so remove it and let the next run try again cleanly.
+        try {
+          new_series.setTag(TAG_BIRTHDAY, people_id);
+        } catch (tag_err) {
+          try { new_series.deleteEventSeries(); } catch (cleanup_err) { /* best effort */ }
+          throw new Error("Could not tag new series, rolled it back: " + tag_err.message);
+        }
+
         new_series.setTransparency(birthday_status);
-        if(false !== birthday_reminder_minutes) {
+        if (false !== birthday_reminder_minutes) {
           new_series.addPopupReminder(Number(birthday_reminder_minutes));
         }
 
-        if(debug) { console.log("Added birthday series for '" + contact.name + "'"); console.timeEnd("Adding birthday series"); }
-
+        new_series_added++;
+        if (debug) { console.log("Added birthday series for '" + contact.name + "'"); }
+      } catch (err) {
+        console.error("Could not add series for '" + contact.name + "': " + err.message);
       }
 
-      // check own timer against own limit
-      if(new Date().getTime() - start > exec_limit) {
+      if (debug) { console.timeEnd("Adding birthday series"); }
+
+      if (new Date().getTime() - start > exec_limit) {
         throw new Error("Exceeded maximum execution time - will resume on next run");
       }
-
     });
 
-    // loop through individual events for one year ahead starting from tomorrow (once more, as now they are all there and up to date)
-    // note: separate loop, as getEventById function only returns the series not the individual occurance (other then getEvents with limit to timeframe) 
-    const next_birthdays = cal_birthday.getEvents(tomorrow, nextYear).filter(e => e.getTag("Ryan-Adams57_birthday") !== undefined);
-    next_birthdays.forEach(event => {
+    // --- age suffix on the next occurrence -------------------------------
+    // Separate pass: getEventSeriesById returns the series, not the individual
+    // occurrence, so the occurrence titles are set here once everything exists.
+    const next_birthdays = cal_birthday.getEvents(tomorrow, nextYear)
+      .filter(function (e) { return get_people_tag(e) !== undefined; });
 
-      const people_id = event.getTag("Ryan-Adams57_birthday");
+    next_birthdays.forEach(function (event) {
+      const people_id = get_people_tag(event);
       const contact = contacts_birthdays[people_id];
 
-      const birthday_title = get_birthday_title(contact.name);
-      const birthday_title_age = get_birthday_title_age(birthday_title, event.getStartTime().getFullYear(), contact.birthday["year"]);
+      // Guard: an orphaned tag (contact deleted mid-run) would otherwise throw
+      // a TypeError here and abort the whole pass. v1.3.2 dereferenced blind.
+      if (!contact) {
+        if (debug) { console.log("Skipping orphaned event '" + event.getTitle() + "' (" + people_id + ")"); }
+        return;
+      }
 
+      const base_title = get_birthday_title(contact.name);
+      const title_with_age = get_birthday_title_age(
+        base_title, event.getStartTime().getFullYear(), contact.birthday["year"]
+      );
       const event_title = event.getTitle();
 
-      if(birthday_title_age !== event_title) {
-        if(debug) { console.time("Modifying next birthday event"); }
-        event.setTitle(birthday_title_age);
-        if(debug) { console.log("Changed title of next birthday event from '" + event_title + "' to '" + birthday_title_age + "'"); console.timeEnd("Modifying next birthday event"); }
+      if (title_with_age !== event_title) {
+        try {
+          event.setTitle(title_with_age);
+          if (debug) { console.log("Retitled next occurrence to '" + title_with_age + "'"); }
+        } catch (err) {
+          console.error("Could not retitle occurrence '" + event_title + "': " + err.message);
+        }
       }
 
-      // check own timer against own limit
-      if(new Date().getTime() - start > exec_limit) {
+      if (new Date().getTime() - start > exec_limit) {
         throw new Error("Exceeded maximum execution time - will resume on next run");
       }
-
     });
-  
-    if(debug) { console.timeEnd("Total execution"); }
 
-    // send a sign of life once a month via mail - after run on last day of month so users see it on the first morning of each new month
+    if (debug) { console.timeEnd("Total execution"); }
+
+    // --- notifications ---------------------------------------------------
+    const contact_count = Object.keys(contacts_birthdays).length;
+    // Count distinct series, not occurrences. v1.3.2 reported occurrence count.
+    const series_count = Object.keys(next_birthdays.reduce(function (acc, e) {
+      acc[get_people_tag(e)] = true;
+      return acc;
+    }, {})).length;
+
+    if (hit_add_cap) {
+      const remaining = contact_count - series_count;
+      const message =
+        "This run added the maximum of " + max_new_series_per_run + " new birthday series and stopped " +
+        "deliberately, to stay inside the daily Google Calendar write quota.\n\n" +
+        "Roughly " + (remaining > 0 ? remaining : 0) + " contacts still need a series. The next " +
+        "scheduled run will continue where this one stopped. No action needed.";
+      if (debug) { console.log(message); } else { notify("Info: Birthday Calendar - continuing tomorrow", message); }
+    }
+
+    // Monthly sign of life, sent after the run on the last day of the month.
     const now = new Date();
     const last_day = new Date(now.getFullYear(), now.getMonth() + 1, 0);
-    if(last_day.getDate() == now.getDate()) {
-      GmailApp.sendEmail(
-        Session.getActiveUser().getEmail(), 
-        "Update: Google Script - Birthday Calendar" , 
-        "Hello," + "\n\n" + 
-        "If you haven't heard from me since a month all is good and I keep your contacts' birthdays synced with your calendar once a day :-)" + "\n\n" + 
-        "You currently have " + Object.keys(contacts_birthdays).length + " contacts with birthdays and " + events.length + " birthday series in your calendar." + "\n\n" +
-        "---" + "\n\n" +
-        "You are currently using v" + version + " of this script - please check project page for updates from time to time to ensure you have the latest version" + "\n" +
+    if (last_day.getDate() === now.getDate() && !debug) {
+      notify(
+        "Update: Google Script - Birthday Calendar",
+        "Hello,\n\n" +
+        "If you have not heard from me for a month, everything is fine and your contacts' " +
+        "birthdays are being synced to your calendar once a day.\n\n" +
+        "You currently have " + contact_count + " contacts with birthdays and " +
+        series_count + " birthday series in your calendar.\n\n" +
+        "---\n\n" +
+        "You are currently using v" + version + " of this script. Check the project page " +
+        "occasionally for updates.\n" +
         "https://github.com/Ryan-Adams57/Google-Contacts-Birthday-Calendar"
       );
     }
 
   } catch (error) {
-    if(debug) {
+    const timed_out = ("Exceeded maximum execution time - will resume on next run" === error.message);
+
+    if (debug) {
       console.error(error.message);
+      if (error.stack) { console.error(error.stack); }
+      return;
     }
-    else {
-      // for unattended regular runs send mail upon any errors
-      GmailApp.sendEmail(
-        Session.getActiveUser().getEmail(), 
-        "Error: Google Script - Birthday Calendar" , 
-        "Unfortunately, an error happened upon syncing your contacts' birthdays with your calendar:" + "\n\n" + 
-        error.message + "\n\n" + 
-        (("Exceeded maximum execution time - will resume on next run" === error.message) ? "The script didn't manage to work through all birthdays this time, due to Google's time limit. But no worries, it will continue its job where it was stopped with the next run later today... " : "Please try again - in case the error persists, check project page for updates of this script or opening an issue"  + "\n" + "https://github.com/Ryan-Adams57/Google-Contacts-Birthday-Calendar" + "\n" + "Note: You are currently using v" + version + " of this script")
-      );
-    }
+
+    notify(
+      "Error: Google Script - Birthday Calendar",
+      "Unfortunately, an error happened upon syncing your contacts' birthdays with your calendar:\n\n" +
+      error.message + "\n\n" +
+      (timed_out
+        ? "The script did not get through all birthdays this time, because of Google's execution " +
+          "time limit. It will continue where it stopped on the next run later today."
+        : "Run the verify_setup() function in the Apps Script editor. It reports which Google " +
+          "account the script is authorized as, which calendars that account owns, and whether " +
+          "your cal_id resolves. That identifies almost every cause of this error.\n\n" +
+          "Project page: https://github.com/Ryan-Adams57/Google-Contacts-Birthday-Calendar\n" +
+          "Script version: v" + version) + "\n\n" +
+      "New series created before this run stopped: " + new_series_added
+    );
   }
-
 }
 
-// build birthday event title
+// ----------------------------------------------------------------------------
+// Helpers
+// ----------------------------------------------------------------------------
+
+/**
+ * Build the event title from the contact's display name.
+ * @param {string} contact_name
+ * @returns {string}
+ */
 function get_birthday_title(contact_name) {
-  // must contain "%s" otherwise only shows contact (display) name as title
-  return (birthday_title.includes("%s")) ? birthday_title.replace("%s", contact_name) : contact_name;
+  return (birthday_title.indexOf("%s") !== -1)
+    ? birthday_title.replace("%s", contact_name)
+    : contact_name;
 }
 
-// extend birthday event title with age at event date
-function get_birthday_title_age(birthday_title, event_year, birth_year) {
-  return (undefined !== birth_year && birth_year > Number(birthday_description_ignore_before)) ? birthday_title + " (" + (event_year - birth_year) + ")" : birthday_title;
+/**
+ * Append the contact's age at the time of the event, when the year is known.
+ * @param {string} title
+ * @param {number} event_year
+ * @param {number|undefined} birth_year
+ * @returns {string}
+ */
+function get_birthday_title_age(title, event_year, birth_year) {
+  return (undefined !== birth_year && Number(birth_year) > Number(birthday_description_ignore_before))
+    ? title + " (" + (event_year - birth_year) + ")"
+    : title;
 }
 
-// build birthday event date
+/**
+ * Series anchor date: the contact's birthday in last year, so the recurrence
+ * already covers the current year.
+ * @param {{month: number, day: number}} contact_birthday
+ * @returns {Date}
+ */
 function get_birthday_date(contact_birthday) {
   const today = new Date();
   return new Date((today.getFullYear() - 1), (contact_birthday["month"] - 1), contact_birthday["day"]);
 }
 
-// build birthday event start and end dates
+/**
+ * Start and end of a one-hour birthday event.
+ * @param {{month: number, day: number}} contact_birthday
+ * @returns {{start: Date, end: Date}}
+ */
 function get_birthday_hours(contact_birthday) {
-  let birthday_start = get_birthday_date(contact_birthday);
-  birthday_start.setHours(birthday_start_hour, 0, 0);
-  let birthday_end = get_birthday_date(contact_birthday);
-  birthday_end.setHours(birthday_start_hour + 1, 0, 0);
+  const birthday_start = get_birthday_date(contact_birthday);
+  birthday_start.setHours(Number(birthday_start_hour), 0, 0, 0);
+  const birthday_end = get_birthday_date(contact_birthday);
+  birthday_end.setHours(Number(birthday_start_hour) + 1, 0, 0, 0);
   return { start: birthday_start, end: birthday_end };
 }
 
-// build birthday event description
-function get_birthday_description(contact_birthday, timezone) {
-  return (undefined !== contact_birthday["year"] && contact_birthday["year"] > Number(birthday_description_ignore_before)) ? Utilities.formatDate(new Date(contact_birthday["year"], (contact_birthday["month"] - 1), contact_birthday["day"]), timezone, birthday_description_format) : "";
+/**
+ * Start and end of a one-hour Feb 29 event, anchored on a real leap year.
+ * @param {number} leap_year
+ * @returns {{start: Date, end: Date}}
+ */
+function get_feb29_hours(leap_year) {
+  const start = new Date(leap_year, 1, 29);
+  start.setHours(Number(birthday_start_hour), 0, 0, 0);
+  const end = new Date(leap_year, 1, 29);
+  end.setHours(Number(birthday_start_hour) + 1, 0, 0, 0);
+  return { start: start, end: end };
 }
 
-// delete all birthday series added by this script
-function delete_birthdays() {
+/**
+ * Most recent leap year at or before last year. Used to anchor a Feb 29 series
+ * on a date that actually exists.
+ * @returns {number}
+ */
+function get_recent_leap_year() {
+  let year = new Date().getFullYear() - 1;
+  while (!is_leap_year(year)) { year--; }
+  return year;
+}
 
+/**
+ * @param {number} year
+ * @returns {boolean}
+ */
+function is_leap_year(year) {
+  return (0 === year % 4 && 0 !== year % 100) || (0 === year % 400);
+}
+
+/**
+ * Event description holding the date of birth, when the year is known and above
+ * the ignore threshold.
+ * @param {{year?: number, month: number, day: number}} contact_birthday
+ * @param {string} timezone
+ * @returns {string}
+ */
+function get_birthday_description(contact_birthday, timezone) {
+  if (undefined === contact_birthday["year"] ||
+      Number(contact_birthday["year"]) <= Number(birthday_description_ignore_before)) {
+    return "";
+  }
+  return Utilities.formatDate(
+    new Date(contact_birthday["year"], (contact_birthday["month"] - 1), contact_birthday["day"]),
+    timezone,
+    birthday_description_format
+  );
+}
+
+// ----------------------------------------------------------------------------
+// Teardown
+// ----------------------------------------------------------------------------
+
+/**
+ * Count, without deleting, the birthday series this script owns. Run this before
+ * delete_birthdays() to confirm the target set.
+ */
+function delete_birthdays_dry_run() {
   try {
+    const cal_birthday = get_birthday_calendar();
+    const range = get_one_year_window();
+    const events = cal_birthday.getEvents(range.start, range.end)
+      .filter(function (e) { return get_people_tag(e) !== undefined; });
 
-    if(!cal_birthday) {
-      throw new Error("No owned calendar accessible");
-    }
-
-    // start own timer (milliseconds)
-    const start = new Date().getTime();
-
-    if(debug) { console.time("Deleting birthdays"); }
-
-    // beginning of tomorrow
-    const tomorrow = new Date();
-    tomorrow.setDate(tomorrow.getDate() + 1);
-    tomorrow.setHours(0, 0, 0);
-
-    // end of day in one year from now
-    const nextYear = new Date();
-    nextYear.setFullYear(nextYear.getFullYear() + 1);
-    nextYear.setHours(23, 59, 59);
-
-    // get all individual events from tomorrow until one year ahead tagged "Ryan-Adams57_birthday" ie added by this script
-    const events = cal_birthday.getEvents(tomorrow, nextYear).filter(e => e.getTag("Ryan-Adams57_birthday") !== undefined);
-
-    // loop through events and delete birthday series
-    events.forEach(event => {
-
-      const event_id = event.getId();
-      const event_title = event.getTitle();
-
-      if(debug) { console.time("Deleting birthday series"); }
-      cal_birthday.getEventSeriesById(event_id).deleteEventSeries();
-      if(debug) { console.log("Deleted birthday series '" + event_title); console.timeEnd("Deleting birthday series"); }
-
-      // check own timer against own limit
-      if(new Date().getTime() - start > exec_limit) {
-        throw new Error("Exceeded maximum execution time - please restart 'delete_birthdays' again to complete the job");
-      }
-
-    });
-
+    console.log("DRY RUN. Calendar: \"" + cal_birthday.getName() + "\"");
+    console.log("Series tagged \"" + TAG_BIRTHDAY + "\" that would be deleted: " + events.length);
+    events.slice(0, 20).forEach(function (e) { console.log("  " + e.getTitle()); });
+    if (events.length > 20) { console.log("  ... and " + (events.length - 20) + " more"); }
+    console.log("Nothing was deleted. Run delete_birthdays() to delete for real.");
   } catch (error) {
     console.error(error.message);
   }
+}
 
+/**
+ * Delete every birthday series this script created. Destructive.
+ * Only touches events carrying the TAG_BIRTHDAY tag, so hand-made events on the
+ * same calendar are left alone. Run delete_birthdays_dry_run() first.
+ */
+function delete_birthdays() {
+  const start = new Date().getTime();
+  let deleted = 0;
+
+  try {
+    const cal_birthday = get_birthday_calendar();
+    if (debug) { console.time("Deleting birthdays"); }
+
+    const range = get_one_year_window();
+    const events = cal_birthday.getEvents(range.start, range.end)
+      .filter(function (e) { return get_people_tag(e) !== undefined; });
+
+    console.log("Deleting " + events.length + " birthday series from \"" + cal_birthday.getName() + "\"");
+
+    for (let i = 0; i < events.length; i++) {
+      const event_title = events[i].getTitle();
+      try {
+        require_series(cal_birthday, events[i].getId()).deleteEventSeries();
+        deleted++;
+        if (debug) { console.log("Deleted '" + event_title + "'"); }
+        // Pace the deletes against the Calendar write quota.
+        Utilities.sleep(500);
+      } catch (err) {
+        console.error("Could not delete '" + event_title + "': " + err.message);
+      }
+
+      if (new Date().getTime() - start > exec_limit) {
+        console.log("Deleted " + deleted + " of " + events.length +
+                    ". Hit the execution time limit, run delete_birthdays() again to finish.");
+        return;
+      }
+    }
+
+    console.log("Deleted " + deleted + " series. Re-run delete_birthdays_dry_run() to confirm zero remain.");
+    if (debug) { console.timeEnd("Deleting birthdays"); }
+  } catch (error) {
+    console.error(error.message);
+  }
+}
+
+/**
+ * Tomorrow 00:00 through one year ahead 23:59. A yearly series appears exactly
+ * once in this window.
+ * @returns {{start: Date, end: Date}}
+ */
+function get_one_year_window() {
+  const start = new Date();
+  start.setDate(start.getDate() + 1);
+  start.setHours(0, 0, 0, 0);
+
+  const end = new Date();
+  end.setFullYear(end.getFullYear() + 1);
+  end.setHours(23, 59, 59, 999);
+
+  return { start: start, end: end };
 }
