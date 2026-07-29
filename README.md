@@ -1,107 +1,69 @@
-# Google-Contacts-Birthday-Calendar
+# Google Contacts Birthday Calendar
 
-Sync birthdays from Google Contacts into a dedicated Google Calendar using Apps Script.
+Never miss a birthday again! This tool automatically syncs birthdays from your **Google Contacts** into a dedicated **Google Calendar**, complete with yearly reminders, using Google Apps Script.
 
-Automatic syncing of Google Contacts birthdays as recurring events with reminders in Google Calendar
+## Why you need this
 
-# Introduction
+Because of privacy regulations, birthdays you save in Google Contacts don't automatically appear in Google Calendar, even with birthday syncing turned on. That leaves you two bad options: manually create (and maintain) a recurring event for every contact, or risk forgetting the people who matter.
 
-Due to regulatory requirements, birthdays added to Google Contacts are not shown in Google Calendar, even when birthday syncing is enabled.
+This script solves that for you. It reads the birthdays already stored in your contacts and creates a recurring calendar event for each one, automatically.
 
-As a result, you must either manually create a recurring birthday event for each contact and keep it updated, or risk missing important birthdays.
+## What you get
 
-Google Birthday Calendar uses Google Apps Script to automatically create and sync a recurring calendar event for every contact that has a birthday.
+- **Automatic reminders** for every contact's birthday, right in Google Calendar.
+- **One source of truth**: keep birthdays in Google Contacts alongside the rest of your contact info.
+- **Hands-off syncing**: runs once a day in the background.
+- **Quiet by design**: you're only emailed when there's a problem, plus an occasional status update.
 
-# Key benefits
+## Getting started
 
-Receive birthday reminders in Google Calendar
+### Step 1 - Add the code
 
-Maintain birthday data in one place, alongside other contact information in Google Contacts
+1. Go to [script.google.com](https://script.google.com).
+2. Create a **New project** and name it `Birthday Calendar`.
+3. Open `code.gs` from this repository, select everything, and copy it.
+4. Back in the Apps Script editor, open `code.gs` (it may just contain an empty `myFunction()`), select all, and paste the copied code over it.
+5. In the left panel, click the **+** next to **Services**, then add both **People API** and **Google Calendar API**.
+6. Click **Save project to Drive**.
 
-Automatically sync updates once per day in the background, with email notifications only for issues or occasional status updates
+### Step 2 - Configure and authorize
 
-# Setup
+1. Review the settings in the `CONFIGURATION` section of the code. Each `const` has a comment explaining what it does.
+2. For your first run, set `const debug = true` so you can watch progress in the console.
+3. Click **Run** and grant permissions when prompted. At "Authorization required", click **Review Permissions** and choose the Google account with your contacts and calendar. You'll see an "app not verified" warning, so click **Advanced**, then **Go to Birthday Calendar (unsafe)**.
+4. Sign in again and approve the requested access: **Mail** (for sign-in and error notifications), **Contacts** (to read contacts and find birthdays), and **Calendar** (to create and update birthday events).
+5. Google will email you a security alert about the new permissions. Confirm it was you.
 
-A) Code and resources
+### Step 3 - Put it on autopilot
 
-Open https://script.google.com in your browser
+1. Set `debug` back to `false`.
+2. Open **Triggers** in the left panel and click **Add Trigger**.
+3. Use these settings:
 
-Create a new project and name it “Birthday Calendar”
+| Setting | Value |
+| --- | --- |
+| Function to run | `update_birthdays` |
+| Deployment | `Head` |
+| Event source | `Time-driven` |
+| Type | `Day timer` |
+| Time of day | `10pm to 11pm` |
+| Failure notification | default |
 
-Open the code.gs file from the GitHub repository, select all contents, and copy them to the clipboard
+4. Click **Save**. That's it, you're done!
 
-Return to the Apps Script editor, ensure you are in code.gs (which may only contain an empty myFunction()), select all content, and replace it by pasting the copied code
+## Good to know
 
-In the left pane, click the “+” button next to Services, scroll down, select People API, and click Add
+- **6-minute limit:** Google caps each script run at 6 minutes. To stay safe, the script stops around 5m30s and picks up where it left off on the next run. You'll get an email if this happens.
+- **Monthly check-in:** Once a month the script sends a short "still working" email so you know everything's running.
 
-Repeat the step above and add Google Calendar API
+## Everyday use
 
-Click “Save project to Drive”
+Just keep using Google Contacts and Google Calendar like you always do. Add a birthday to a contact, and the reminder shows up in your calendar automatically. No extra steps.
 
-B) Configuration and permissions
+## Contributing
 
-Adjust the configuration using the const declarations in the “CONFIGURATION” section (see comments above each setting)
+Issues and pull requests are welcome. Feel free to open one on GitHub.
 
-For testing, set const debug = true to receive detailed progress updates in the console
+## License
 
-Click Run and grant the required permissions
-
-When prompted with “Authorization required,” click Review Permissions and select the Google account that contains the contacts and calendar you want to sync
-
-You will see a warning that the app is not verified by Google. You can either review the source code or proceed
-
-Click Advanced, then select “Go to Birthday Calendar (unsafe)”
-
-Sign in again and grant the requested permissions:
-
-Mail access: used for authentication and email notifications in case of errors
-
-Contacts access: used to read contacts and detect birthdays
-
-Calendar access: used to create and update birthday events
-
-You will receive a security alert email about the granted permissions. Confirm that it was you
-
-C) Automation
-
-Once everything is working, set debug back to false
-
-Open Triggers from the left-hand pane and click Add Trigger
-
-Configure the trigger with the following settings:
-
-Function to run: update_birthdays
-
-Deployment to run: Head
-
-Event source: Time-driven
-
-Time-based trigger: Day timer
-
-Time of day: 10pm to 11pm
-
-Failure notification: default
-
-Click Save
-
-# Important
-
-Google enforces a maximum execution time of 6 minutes per script. To stay within this limit, the script stops execution after approximately 5 minutes and 30 seconds and resumes on the next scheduled run, continuing where it left off.
-
-You will receive an email notification if this occurs.
-
-# Note
-
-Once per month, the script sends a brief “sign of life” email to confirm that everything is still running as expected.
-
-# Usage
-
-Continue using Google Contacts and Google Calendar as usual. Simply enter birthdays directly in your contacts, and you will automatically receive birthday reminders via Google Calendar.
-
-# Contributors
-
-Issues and code contributions are welcome via GitHub.
-
-# License
-
-This code is released under the GNU General Public License v3.0. You are free to use it in your own projects. References to this repository are appreciated.
+Released under the **GNU General Public License v3.0**. You're free to use it in your own projects; a link back to this repository is appreciated.
